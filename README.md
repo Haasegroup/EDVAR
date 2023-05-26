@@ -1,5 +1,5 @@
 # EDVAR
-This repository contains the Python dependencies for a project focused on image analysis, segmentation, and visualization. The required packages are listed in the ```requirements.txt``` file.
+This repository contains the Python dependencies for EDVAR. The required packages are listed in the ```requirements.txt``` file.
 
 ## Installation
 To install the required dependencies, run the following command in your terminal:
