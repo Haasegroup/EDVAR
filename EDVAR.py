@@ -1,74 +1,53 @@
 # -*- coding: utf-8 -*-
-"""
-Created on Sun Jan 22 14:50:22 2023
-
-@author: rstudio
-"""
-
-
-# ======================================================================== Libraries ==================================================================
-
-# Opening the files
 import os
-import tifffile
-from readlif.reader import LifFile
-import read_lif
+import tkinter
+from pathlib import Path  # to get the filename only, without the extension
+from statistics import mean
+from tkinter import filedialog, messagebox
 
-# Image processing
-import numpy as np
-import vedo
-from skimage import exposure
-from skimage.filters import threshold_otsu
-from skimage.morphology import skeletonize
-from skimage.measure import label
-from skimage.morphology import medial_axis
-from scipy.ndimage import gaussian_filter
-
-# Image analysis
-import pandas as pd
+import customtkinter
 import cv2
-from skan import Skeleton, summarize
-from statistics import mean 
-from numpy.linalg import norm
-
-# Visualisation
+import numpy as np
+import pandas as pd
 import pyvista as pv
 import pyvistaqt as pq
-from matplotlib import pyplot as plt
-from matplotlib.backends.backend_tkagg import (FigureCanvasTkAgg, NavigationToolbar2Tk)
-
-# Statistics and plotting
-from pathlib import Path # to get the filename only, without the extension
-from scipy.stats import f_oneway, ttest_ind, levene, kstest, tukey_hsd, mannwhitneyu, kruskal
-from scipy.stats import norm as normaldensityfunction
-import seaborn as sns
+import read_lif
 import scikit_posthocs as sp
+import seaborn as sns
+import tifffile
+import vedo
+from matplotlib import pyplot as plt
+from matplotlib.backends.backend_tkagg import (FigureCanvasTkAgg,
+                                               NavigationToolbar2Tk)
+from numpy.linalg import norm
+from readlif.reader import LifFile
+from scipy.ndimage import gaussian_filter
+from scipy.stats import f_oneway, kruskal, kstest, levene, mannwhitneyu
+from scipy.stats import norm as normaldensityfunction
+from scipy.stats import ttest_ind, tukey_hsd
+from skan import Skeleton, summarize
+from skimage import exposure
+from skimage.filters import threshold_otsu
+from skimage.measure import label
+from skimage.morphology import medial_axis, skeletonize
 
-# Tkinter
-import tkinter
-from tkinter import messagebox
-from tkinter import filedialog
-import customtkinter
-
-
-
-
-
-
-
-# ==================================================================== 3D Image Analysis ==========================================================================
-
-
-"""
-Read the lif 
-"""
 
 def extract_z_stack(self, file, nb_lif, time, channel_fluo):
-    
-    # First, the chosen file .lif, .tif or .tiff file is extracted. 
-    # In a .lif, there are usually several series (corresponding to the series shown when opening the file on ImageJ).
-    # The series' number and the channels are chosen by the user.
-    # This file is a z-stack, with a fluo channel. There are thus a time, fluo_channel, z, y, x channels.
+    """
+    Extracts the z-stack from a .lif, .tif or .tiff file with fluo channel.
+
+    Args:
+        file (str): Path to the input file (.lif, .tif, or .tiff).
+        nb_lif (int): The number of the desired image set in the lif file.
+        time (int): Timepoint for extracting the frame.
+        channel_fluo (int): Fluo channel to be extracted.
+
+    Returns:
+        np.ndarray: Extracted z-stack image with shape (z, y, x).
+
+    Raises:
+        messagebox.showinfo: If the file extension is not '.tif', '.tiff' or '.lif'.
+    """
     
     file_extension = os.path.splitext(file)[1]
     
@@ -94,17 +73,29 @@ def extract_z_stack(self, file, nb_lif, time, channel_fluo):
     else: 
         self.message = messagebox.showinfo(title = "Error", message = "The extension of the file should be '.tif', '.tiff' or '.lif'")
                 
-
-
-"""
-Extract Metadata
-"""
-
 def metadata(file, nb_lif):
+    """
+    Extracts metadata from a .lif or .tif file, such as dimensions and scaling factors.
     
-    # Second, we extract the metadata from the file.
-    # The metadata gives us the exact dimensions for the microvessels.
-    # It comes directly from the microscope file.
+    Args:
+        file (str): Path to the input file (.lif or .tif).
+        nb_lif (int): The series number in the .lif file (corresponding to ImageJ's series).
+        
+    Returns:
+        tuple: A tuple containing the following metadata:
+            - scale_x_px (float): X-scale in pixels per micrometer.
+            - scale_y_px (float): Y-scale in pixels per micrometer.
+            - scale_z_px (float): Z-scale in pixels per micrometer.
+            - scale_x (float): X-scale in micrometers per pixel.
+            - scale_y (float): Y-scale in micrometers per pixel.
+            - scale_z (float): Z-scale in micrometers per pixel.
+            - x_total (int): Total number of pixels in the X dimension.
+            - y_total (int): Total number of pixels in the Y dimension.
+            - z_stacks (int): Number of slices (Z-stacks) in the image.
+            - x_total_um (float): Total size in the X dimension in micrometers.
+            - y_total_um (float): Total size in the Y dimension in micrometers.
+            - depth (float): Depth of the image in micrometers.
+    """
     
     file_extension = os.path.splitext(file)[1]
     
@@ -177,24 +168,26 @@ def metadata(file, nb_lif):
         
     return(scale_x_px, scale_y_px, scale_z_px, scale_x, scale_y, scale_z, x_total, y_total, z_stacks, x_total_um, y_total_um, depth)
 
-
-
-"""
-Blur and threshold 
-"""
-
-
 def who_is_the_mask(image, segmentation, kernel):
+    """
+    Performs image processing to create masks from the input image or uses the provided mask.
+
+    Args:
+        image (numpy.ndarray): The input image.
+        segmentation (str): 'on' if input is confocal images and masks need to be created,
+                            otherwise the input is considered as a mask.
+        kernel (int): Gaussian filter kernel size for blurring the image.
+
+    Returns:
+        tuple: A tuple containing the following masks:
+            - mask (numpy.ndarray): Binary mask of the image.
+            - mask_inv (numpy.ndarray): Inverted binary mask of the image.
+            - mask_skel (numpy.ndarray): Binary mask for skeletonization (if segmentation is 'on').
+            - mask_skel_inv (numpy.ndarray): Inverted binary mask for skeletonization (if segmentation is 'on').
+    """
+
     global mask
-    
-    # Third, we perform the image processing.
-    # The user can either choose to create the mask via the platform,
-    # - this option is fit for images not unevenly exposed -
-    # or, one can input directly one's own masks.
-    # This is the recommended option.
-    # Either way, the user should always check the mesh and pop-up window of the skeleton,
-    # to see if the results of the analysis are correct. 
-    
+
     if segmentation == 'on': # input is confocal images
     
     # HISTOGRAM EQUALIZATION makes segmentation more robust.
@@ -216,19 +209,23 @@ def who_is_the_mask(image, segmentation, kernel):
         
     return (mask, mask_inv, mask_skel, mask_skel_inv)
 
-
-
-
-"""
-Get the mesh
-"""
-
 def real_mesh(mask, mask_inv, scale_x, scale_y, scale_z):
+    """
+    Computes the mesh from the given mask for morphological analysis.
     
-    # From the mask, the mesh is computed.
-    # This mesh will serve for morphological analysis.
-    # Two meshes are the ouput of this function: 
-    # a surface mesh (for the diameters), and a filled mesh (for the area and volume).
+    Two meshes are the output of this function: a surface mesh (for the diameters),
+    and a filled mesh (for the area and volume).
+    
+    Args:
+        mask (np.ndarray): The input mask.
+        mask_inv (np.ndarray): The inverted mask.
+        scale_x (float): The scale factor for the x-axis.
+        scale_y (float): The scale factor for the y-axis.
+        scale_z (float): The scale factor for the z-axis.
+        
+    Returns:
+        tuple: A tuple containing vol, surf, vol_inv_um, voxels.
+    """
     
     mask_transposed = np.transpose(mask, axes = [2,1,0])
     vol = vedo.Volume(mask_transposed, spacing=(scale_x,scale_y,scale_z)) # µm/px
@@ -241,33 +238,49 @@ def real_mesh(mask, mask_inv, scale_x, scale_y, scale_z):
     
     return(vol, surf, vol_inv_um, voxels)
 
-
-
-
-"""
-Skeleton in 3D
-"""
-
 def skeleton_3d_make(mask_skel_inv): 
+    """
+    Compute the 3D skeleton of a given mask.
+
+    This function computes the 3D skeleton on the gaussian-blurred mesh to obtain accurate branches.
     
-    # Here, the 3D skeleton is computed.
-    # The skeleton is performed on the gaussian-blurred mesh, to have accurate branches
+    Parameters:
+    mask_skel_inv (numpy.ndarray): The input binary mask with inverted values for the object of interest.
     
+    Returns:
+    numpy.ndarray: The computed 3D skeleton.
+    """
+
     skeleton_3d = skeletonize(mask_skel_inv, method='lee') # px/µm
     return skeleton_3d
 
-
-
-
-"""
-Skeleton analysis
-"""
-
 def skeleton_3d_analysis(skeleton_3d, x_total, y_total, scale_x):    
-    # The 3D skeleton is projected and re-skeletonized, to ensure the highest robustness as possible before the analysis.
-    # Indeed, the 3D skeleton could be disconnected in some parts due to the segmentation.
-    # The branches that were going through the z plane are projected on the (x,y) plane, thus their length is still taken into account, 
-    # which gives more details than doing just a skeletonization on the z-average.
+    """
+    Analyzes a 3D skeleton by projecting and re-skeletonizing it to ensure robustness.
+    The function computes various parameters related to branches, junctions, and endpoints.
+    
+    Args:
+    skeleton_3d (numpy.ndarray): A 3D skeleton representation of the structure.
+    x_total (int): Total number of pixels along the x-axis.
+    y_total (int): Total number of pixels along the y-axis.
+    scale_x (float): Scale factor for the x-axis.
+
+    Returns:
+    tuple: A tuple containing the following elements:
+        - sk_3d_projection_clean (numpy.ndarray): Cleaned 2D projection of the 3D skeleton.
+        - branch_data (pandas.DataFrame): A DataFrame containing information about branches.
+        - number_branches (int): Total number of branches.
+        - number_isolated_branches (int): Number of isolated branches.
+        - number_endpoint_junctions_branches (int): Number of endpoint-junction branches.
+        - number_junction_junction_branches (int): Number of junction-junction branches.
+        - number_circular_branches (int): Number of circular branches.
+        - number_junctions (int): Total number of junctions.
+        - number_endpoints (int): Total number of endpoints.
+        - average_branch_length (float): Average length of branches in micrometers.
+        - total_length (float): Total length of all branches in micrometers.
+        - endpoints (numpy.ndarray): Array containing coordinates of endpoints.
+        - junctions (list): List containing coordinates of junctions.
+    """
 
     # Analysis
     z,x,y = skeleton_3d.nonzero()
@@ -301,23 +314,50 @@ def skeleton_3d_analysis(skeleton_3d, x_total, y_total, scale_x):
     
     return sk_3d_projection_clean, branch_data, number_branches, number_isolated_branches, number_endpoint_junctions_branches, number_junction_junction_branches, number_circular_branches, number_junctions, number_endpoints, average_branch_length, total_length, endpoints, junctions
 
-
 def summarize_props_skeleton(branch_data):
+    """
+    Extracts the start and end point coordinates of each branch in the given branch_data.
+    
+    Args:
+        branch_data (dict): A dictionary containing branch data with keys 'coord-src-0', 'coord-src-1',
+                            'coord-dst-0', and 'coord-dst-1'.
+                            
+    Returns:
+        tuple: A tuple containing four lists, representing the start and end point coordinates for each branch,
+               organized as follows: coord_src_0, coord_src_1, coord_dst_0, coord_dst_1.
+    """
+
     coord_src_0 = branch_data['coord-src-0'] # natural space; x, contain the start point coordinates of each branch, for axes 0, 1, 2.
     coord_src_1 = branch_data['coord-src-1'] # y
     coord_dst_0 = branch_data['coord-dst-0'] # and end point coordinates of each branch, for axes 0, 1, 2.
     coord_dst_1 = branch_data['coord-dst-1']
     return coord_src_0, coord_src_1, coord_dst_0, coord_dst_1
 
-
-
-
-"""
-Parameters extraction: area, volume, diameters
-"""
-
 def area_volume_diameters(self, surf, voxels, image, mask_skel, scale_x, scale_y, scale_z, x_total_um, y_total_um, depth, coord_src_0, coord_dst_0, coord_src_1, coord_dst_1):
-    
+    """
+    Calculate area, volume and diameters of the vessels from the provided data.
+
+    Args:
+    surf: surface mesh of the vessels
+    voxels: filled volume mesh of the vessels
+    image: 3D image of the vessels
+    mask_skel: skeletonized mask of the vessels
+    scale_x, scale_y, scale_z: scaling factors for x, y and z axes
+    x_total_um, y_total_um, depth: total dimensions in micrometers
+    coord_src_0, coord_dst_0, coord_src_1, coord_dst_1: coordinates of the start and end points of each branch along axes 0 and 1
+
+    Returns:
+    area: surface area of the vessels (µm²)
+    volume: volume of the vessels
+    volume_total_fibrin_gel: total volume of the fibrin gel
+    area_total_fibrin_gel: total surface area of the piece studied under the microscope
+    percentage_occupancy: percentage of the volume occupied by the vessels
+    diameter_horizontal: list of horizontal diameters of the vessels
+    diameter_vertical: list of vertical diameters of the vessels
+    mean_diameter_horizontal: mean horizontal diameter of the vessels
+    mean_diameter_vertical: mean vertical diameter of the vessels (or "N/A" if not computable)
+
+    """
 
     # ================================   Area, Volume  ==================================================
     # We use the 'area' and 'volume' functions from Vedo.
@@ -415,13 +455,23 @@ def area_volume_diameters(self, surf, voxels, image, mask_skel, scale_x, scale_y
     
     return area, volume, volume_total_fibrin_gel, area_total_fibrin_gel, percentage_occupancy, diameter_horizontal, diameter_vertical, mean_diameter_horizontal, mean_diameter_vertical
 
-
-
-
-"""
-Get the max projection
-"""
 def max_projection(image, x_total, y_total, x_total_um, y_total_um):
+    """
+    Computes the maximum intensity projection of a 3D image stack along the z-axis.
+    
+    Args:
+        image (array-like): A 3D image stack with shape (z, y, x).
+        x_total (int): The total number of pixels in the x dimension.
+        y_total (int): The total number of pixels in the y dimension.
+        x_total_um (float): The total size in micrometers of the x dimension.
+        y_total_um (float): The total size in micrometers of the y dimension.
+
+    Returns:
+        tuple: A tuple containing the max projection array and the resized max projection for plotting.
+            - max_proj (numpy.ndarray): The computed maximum intensity projection with shape (y, x).
+            - max_proj_toplot (numpy.ndarray): The resized maximum intensity projection for plotting with shape (y_total_um, x_total_um).
+    """
+    
     max_proj = np.zeros((x_total,y_total))
     for i in image: # iterate on each z
         for position, pixel_value in enumerate (i):
@@ -430,20 +480,8 @@ def max_projection(image, x_total, y_total, x_total_um, y_total_um):
     return max_proj, max_proj_toplot # max_proj to check on the skeleton in the pop-up window, and max_proj_to_plot in the display window
 
 
-
-
-
-
-
-
-
-
-
-# ================================================================== GUEST USER INTERFACE ==================================================================
-
 customtkinter.set_appearance_mode("System")
 customtkinter.set_default_color_theme("blue")
-
 
 class App(customtkinter.CTk):
 
@@ -453,9 +491,6 @@ class App(customtkinter.CTk):
         self.title("ƎDVAR")
         self.state('zoomed')
         self.protocol("WM_DELETE_WINDOW", self.on_closing)  # call .on_closing() when app gets closed
-        
-        
-        
         
         
 # ========================================================================= LAYOUT ==================================================================        
@@ -758,26 +793,7 @@ class App(customtkinter.CTk):
         self.combobox_1.set("Data")
         self.progressbar.set(1)
 
-
-
-
-
-
-
-
-            
-
-
-
-
-
-
-
-
 # ========================================================================= FUNCTIONS ==================================================================   
-
-
-
 
     # ================= OPENING the file ==================
     # In this step, the file (.lif, .tif or .tiff) is opened by the user.
@@ -787,7 +803,14 @@ class App(customtkinter.CTk):
 
 
     def open_file(self):
+        """
+        This function allows the user to open a file, process the image, and display the max projection.
+        It updates several global variables that are used in other functions for further analysis.
         
+        The function provides error messages if required fields are not filled properly. 
+        It also renews the buttons' state after opening a new file.
+        """
+
         # ============ Variables ============
         # These variables will be used in other functions
         # Next to each is written in a comment where else this variable is used.
@@ -833,8 +856,6 @@ class App(customtkinter.CTk):
                                                                           "\n" +
                                                                           "The mask should be in .lif or .tif format, \n" +
                                                                           "in order to have the metadata with it.")
-        
-        
         
         # ============ IMAGE PROCESSING ============
         else: 
